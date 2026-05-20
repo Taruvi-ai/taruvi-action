@@ -1,0 +1,47 @@
+name: 'Taruvi Frontend Worker Deploy'
+description: 'Deploy frontend build to Taruvi Frontend Workers'
+author: 'Taruvi'
+branding:
+  icon: 'globe'
+  color: 'blue'
+
+inputs:
+  site-url:
+    description: 'Taruvi site URL (e.g., https://api.taruvi.cloud/sites/my-site)'
+    required: true
+  api-key:
+    description: 'Taruvi API key'
+    required: true
+  app-slug:
+    description: 'App slug for deployment'
+    required: true
+  zip-path:
+    description: 'Path to frontend build zip file'
+    required: true
+  branch-name:
+    description: 'Branch name for subdomain suffix (used when creating new workers)'
+    required: false
+    default: ''
+
+outputs:
+  worker-slug:
+    description: 'Deployed frontend worker slug'
+  deploy-type:
+    description: 'Deploy type (update/create)'
+  frontend-url:
+    description: 'Frontend worker URL'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Deploy Frontend Worker
+      id: deploy
+      shell: bash
+      run: ${{ github.action_path }}/../scripts/deploy-frontend.sh
+      env:
+        INPUT_SITE_URL: ${{ inputs.site-url }}
+        INPUT_API_KEY: ${{ inputs.api-key }}
+        INPUT_APP_SLUG: ${{ inputs.app-slug }}
+        INPUT_FRONTEND_ZIP: ${{ inputs.zip-path }}
+        INPUT_BRANCH_NAME: ${{ inputs.branch-name }}
+        INPUT_SKIP_FRONTEND: 'false'

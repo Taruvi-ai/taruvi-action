@@ -1,0 +1,35 @@
+name: 'Taruvi Backend Import'
+description: 'Import backend configuration to Taruvi'
+author: 'Taruvi'
+branding:
+  icon: 'database'
+  color: 'purple'
+
+inputs:
+  site-url:
+    description: 'Taruvi site URL (e.g., https://api.taruvi.cloud/sites/my-site)'
+    required: true
+  api-key:
+    description: 'Taruvi API key'
+    required: true
+  config-dir:
+    description: 'Path to backend config directory'
+    required: false
+    default: '.taruvi-backend'
+
+outputs:
+  status:
+    description: 'Import status (success/skipped)'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Import Backend Configuration
+      id: import
+      shell: bash
+      run: ${{ github.action_path }}/../scripts/import-backend.sh
+      env:
+        INPUT_SITE_URL: ${{ inputs.site-url }}
+        INPUT_API_KEY: ${{ inputs.api-key }}
+        INPUT_BACKEND_DIR: ${{ inputs.config-dir }}
+        INPUT_SKIP_BACKEND: 'false'
