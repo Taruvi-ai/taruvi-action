@@ -38,14 +38,45 @@ fi
 echo "Deploying frontend to: $SITE_URL"
 echo "App slug: $APP_SLUG"
 
-# Get default frontend worker slug from app settings
+# Get default frontend worker slug from app settings.
+#
+# This lookup decides between updating the existing worker and creating a new
+# one, so it must succeed before we act on it. A failed or unreadable response
+# is NOT treated as "no default worker" — doing so would create a duplicate
+# worker on a transient error and leave the real one serving the old build.
 echo "Checking for default frontend worker..."
-SETTINGS_RESPONSE=$(curl -s \
+SETTINGS_RESPONSE=$(curl -s -w "\n%{http_code}" \
   "${SITE_URL}/api/apps/${APP_SLUG}/settings/" \
   -H "Authorization: Api-Key ${API_KEY}" \
-  --connect-timeout 30) || true
+  --connect-timeout 30 \
+  --max-time 60) || true
 
-WORKER_SLUG=$(echo "$SETTINGS_RESPONSE" | jq -r '.data.default_frontend_worker_slug // empty')
+SETTINGS_CODE=$(echo "$SETTINGS_RESPONSE" | tail -n1)
+SETTINGS_BODY=$(echo "$SETTINGS_RESPONSE" | sed '$d')
+
+if [[ ! "$SETTINGS_CODE" =~ ^[0-9]+$ ]] || [[ "$SETTINGS_CODE" == "000" ]]; then
+  echo "::error::Could not reach ${SITE_URL} to read app settings (no HTTP response)."
+  echo "::error::Check that site-url is correct and reachable."
+  exit 1
+fi
+
+if [[ "$SETTINGS_CODE" -lt 200 || "$SETTINGS_CODE" -ge 300 ]]; then
+  echo "::error::Could not read settings for app '${APP_SLUG}' (HTTP ${SETTINGS_CODE})."
+  case "$SETTINGS_CODE" in
+    401|403) echo "::error::Credentials were rejected. An API key is only valid on the site that issued it — confirm site-url and api-key came from the same Taruvi site." ;;
+    404)     echo "::error::App '${APP_SLUG}' not found on ${SITE_URL}. Check app-slug, and that the app belongs to this site." ;;
+  esac
+  echo "$SETTINGS_BODY"
+  exit 1
+fi
+
+if ! echo "$SETTINGS_BODY" | jq -e . >/dev/null 2>&1; then
+  echo "::error::App settings response was not valid JSON (HTTP ${SETTINGS_CODE})."
+  echo "$SETTINGS_BODY"
+  exit 1
+fi
+
+WORKER_SLUG=$(echo "$SETTINGS_BODY" | jq -r '.data.default_frontend_worker_slug // empty')
 
 if [[ -n "$WORKER_SLUG" && "$WORKER_SLUG" != "null" ]]; then
   # Worker exists - Update it
