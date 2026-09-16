@@ -8,10 +8,12 @@ Import backend configuration to Taruvi.
 - name: Import Backend
   uses: Taruvi-ai/taruvi-action/backend@v1
   with:
-    site-url: ${{ secrets.TARUVI_SITE_URL }}
+    site-url: ${{ vars.TARUVI_SITE_URL }}
     api-key: ${{ secrets.TARUVI_API_KEY }}
     config-dir: .taruvi-backend
 ```
+
+Only `api-key` is a secret. See [Handling credentials](../README.md#handling-credentials) in the root README for why `site-url` belongs in `vars`, and how to lay out one GitHub Environment per branch.
 
 ## Inputs
 
@@ -26,13 +28,22 @@ Import backend configuration to Taruvi.
 | Output | Description |
 |--------|-------------|
 | `status` | Import status (`success` or `skipped`) |
-| `message` | Status message |
 
 ## How It Works
 
 1. Checks if the config directory exists and is not empty
 2. If found: Zips the contents and imports via `/api/apps/imports/`
 3. If not found: Skips with a notice (not an error)
+
+## Failure behaviour
+
+A missing or empty `config-dir` is not a failure — the action reports `status=skipped` and the job continues.
+
+Everything past that point is a hard failure: a zip that cannot be created, or a non-2xx response from the import endpoint, fails the step and prints the response body.
+
+`status` is only ever `success` or `skipped`. There is no failure value, because a failed import fails the step instead of reporting itself downstream.
+
+If credentials are rejected, check that `site-url` and `api-key` came from the same Taruvi site — a key is only valid on the site that issued it. See [Handling credentials](../README.md#handling-credentials).
 
 ## Backend Config Directory Structure
 
@@ -67,6 +78,7 @@ on:
 jobs:
   import:
     runs-on: ubuntu-latest
+    environment: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -74,12 +86,14 @@ jobs:
         id: import
         uses: Taruvi-ai/taruvi-action/backend@v1
         with:
-          site-url: ${{ secrets.TARUVI_SITE_URL }}
+          site-url: ${{ vars.TARUVI_SITE_URL }}
           api-key: ${{ secrets.TARUVI_API_KEY }}
 
       - name: Print Status
         run: echo "Import status: ${{ steps.import.outputs.status }}"
 ```
+
+`environment:` requires a `push` trigger. For `pull_request` events `github.ref` is `refs/pull/<n>/merge`, which no deployment branch policy matches, so environment secrets are withheld from the job.
 
 ## License
 
