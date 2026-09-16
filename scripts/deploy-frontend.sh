@@ -98,14 +98,42 @@ if [[ -n "$WORKER_SLUG" && "$WORKER_SLUG" != "null" ]]; then
     BUILD_UUID=$(echo "$BODY" | jq -r '.data.latest_build.uuid // empty')
     FRONTEND_URL=$(echo "$BODY" | jq -r '.data.web_url // empty')
     
-    if [[ -n "$BUILD_UUID" && "$BUILD_UUID" != "null" ]]; then
-      echo "Setting build $BUILD_UUID as active..."
-      curl -s -X PATCH "${SITE_URL}/api/cloud/frontend_workers/${WORKER_SLUG}/set-active-build/" \
-        -H "Authorization: Api-Key ${API_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "{\"build_uuid\": \"${BUILD_UUID}\"}" \
-        --connect-timeout 30 || true
+    # Activation is what makes the uploaded build live. If it does not happen the
+    # worker keeps serving the previous build, so a silent failure here would
+    # report a successful deploy while the site stays stale. Both a missing build
+    # UUID and a failed activation are therefore hard errors.
+    if [[ -z "$BUILD_UUID" ]]; then
+      echo "::error::Build uploaded, but the response contained no build UUID, so it could not be activated."
+      echo "::error::The worker is still serving its previous build. Response body:"
+      echo "$BODY"
+      exit 1
     fi
+
+    echo "Setting build $BUILD_UUID as active..."
+    ACTIVATE_RESPONSE=$(curl -s -w "\n%{http_code}" \
+      -X PATCH "${SITE_URL}/api/cloud/frontend_workers/${WORKER_SLUG}/set-active-build/" \
+      -H "Authorization: Api-Key ${API_KEY}" \
+      -H "Content-Type: application/json" \
+      -d "{\"build_uuid\": \"${BUILD_UUID}\"}" \
+      --connect-timeout 30 \
+      --max-time 120) || true
+
+    ACTIVATE_CODE=$(echo "$ACTIVATE_RESPONSE" | tail -n1)
+    ACTIVATE_BODY=$(echo "$ACTIVATE_RESPONSE" | sed '$d')
+
+    if [[ ! "$ACTIVATE_CODE" =~ ^[0-9]+$ ]] || [[ "$ACTIVATE_CODE" == "000" ]]; then
+      echo "::error::Build $BUILD_UUID uploaded, but the activation request got no HTTP response."
+      echo "::error::The worker is still serving its previous build."
+      exit 1
+    fi
+
+    if [[ "$ACTIVATE_CODE" -lt 200 || "$ACTIVATE_CODE" -ge 300 ]]; then
+      echo "::error::Build $BUILD_UUID uploaded, but activation failed (HTTP ${ACTIVATE_CODE})."
+      echo "::error::The worker is still serving its previous build."
+      echo "$ACTIVATE_BODY"
+      exit 1
+    fi
+
     
     echo "::notice::Frontend deployment successful! (updated existing worker: $WORKER_SLUG)"
     echo "worker_slug=$WORKER_SLUG" >> "$GITHUB_OUTPUT"
