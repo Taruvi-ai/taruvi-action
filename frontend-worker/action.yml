@@ -26,10 +26,13 @@ inputs:
 outputs:
   worker-slug:
     description: 'Deployed frontend worker slug'
+    value: ${{ steps.deploy.outputs.worker_slug }}
   deploy-type:
     description: 'Deploy type (update/create)'
+    value: ${{ steps.deploy.outputs.deploy_type }}
   frontend-url:
     description: 'Frontend worker URL'
+    value: ${{ steps.deploy.outputs.frontend_url }}
 
 runs:
   using: 'composite'
