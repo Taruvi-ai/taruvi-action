@@ -2,6 +2,8 @@
 
 GitHub Actions for deploying to Taruvi BaaS platform.
 
+New here? Follow the [Setup Guide](SETUP_GUIDE.md) for a copy-paste `deploy.yml`.
+
 ## Available Actions
 
 | Action | Description |
