@@ -157,6 +157,90 @@ on:
 
 ---
 
+## More environments / sites
+
+The workflow resolves credentials at runtime from `environment: ${{ github.ref_name }}`. To add a site, add a branch and an environment with the same name. The YAML does not change.
+
+Example — 4 environments across 4 sites:
+
+| Branch | Environment | Site URL |
+|---|---|---|
+| `main` | `main` | `.../sites/prod` |
+| `staging` | `staging` | `.../sites/staging` |
+| `qa` | `qa` | `.../sites/qa` |
+| `dev` | `dev` | `.../sites/dev` |
+
+1. Create the branches.
+2. Create one GitHub environment per branch, named identically.
+3. In each, add `TARUVI_API_KEY` (secret) plus `TARUVI_SITE_URL`, `TARUVI_APP_SLUG`, `TARUVI_APP_TITLE` (variables) from that site's Connect page.
+4. Add the branches to the trigger:
+
+```yaml
+on:
+  push:
+    branches: [main, staging, qa, dev]
+  workflow_dispatch:
+```
+
+Same variable names everywhere, different values per environment. Nothing else in the workflow is environment-aware.
+
+**Environment name ≠ branch name?** Map it explicitly and use the mapped value:
+
+```yaml
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      env: ${{ steps.pick.outputs.env }}
+    steps:
+      - id: pick
+        run: |
+          case "${{ github.ref_name }}" in
+            main)    echo "env=production" >> $GITHUB_OUTPUT ;;
+            release) echo "env=staging"    >> $GITHUB_OUTPUT ;;
+            *)       echo "env=dev"        >> $GITHUB_OUTPUT ;;
+          esac
+
+  deploy:
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.env }}
+    # ...same steps as above
+```
+
+**Deploying one branch to several sites** — run the job once per environment with a matrix. Each entry picks up its own secrets:
+
+```yaml
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [eu-prod, us-prod, apac-prod]
+    environment: ${{ matrix.target }}
+    # ...same steps as above
+```
+
+**No dedicated branch** (deploy on demand) — add a choice input and prefer it over the branch name:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        type: choice
+        options: [dev, qa, staging, main]
+
+jobs:
+  deploy:
+    environment: ${{ inputs.target || github.ref_name }}
+```
+
+Add required reviewers on production environments (**Settings → Environments → Required reviewers**) so those deploys pause for approval. Deployment branch rules on an environment also block the wrong branch from ever reaching a site.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
