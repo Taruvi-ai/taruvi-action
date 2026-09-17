@@ -184,29 +184,7 @@ on:
 
 Same variable names everywhere, different values per environment. Nothing else in the workflow is environment-aware.
 
-**Environment name ≠ branch name?** Map it explicitly and use the mapped value:
-
-```yaml
-jobs:
-  resolve:
-    runs-on: ubuntu-latest
-    outputs:
-      env: ${{ steps.pick.outputs.env }}
-    steps:
-      - id: pick
-        run: |
-          case "${{ github.ref_name }}" in
-            main)    echo "env=production" >> $GITHUB_OUTPUT ;;
-            release) echo "env=staging"    >> $GITHUB_OUTPUT ;;
-            *)       echo "env=dev"        >> $GITHUB_OUTPUT ;;
-          esac
-
-  deploy:
-    needs: resolve
-    runs-on: ubuntu-latest
-    environment: ${{ needs.resolve.outputs.env }}
-    # ...same steps as above
-```
+**Environment name ≠ branch name?** Don't map them in YAML — just rename the environment (or add a new one) so it matches the branch exactly. The workflow stays untouched.
 
 **Deploying one branch to several sites** — run the job once per environment with a matrix. Each entry picks up its own secrets:
 
