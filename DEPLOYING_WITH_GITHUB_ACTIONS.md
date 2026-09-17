@@ -248,6 +248,7 @@ Add required reviewers on production environments (**Settings → Environments �
 | `Invalid token.` / 401 / 403 | `TARUVI_SITE_URL` and `TARUVI_API_KEY` are from different sites. Re-copy both from one Connect page. Regenerating the key will not help. |
 | 404 on app settings | `TARUVI_APP_SLUG` is wrong, or the app is on a different site than `TARUVI_SITE_URL`. |
 | Secrets come through empty | Environment name must match the branch name exactly (`main`, not `Main`). Also check the values are on the environment, not only at repo level. |
+| `Frontend Worker with this Slug already exists.` | The worker exists but the app isn't pointing at it. Open the app's settings page in the Taruvi Console and set that worker as the default frontend worker. |
 | `dist.zip: No such file` | Build produced no `dist/`. Check the `Build frontend` step log. |
 | Backend step says `skipped` | No `.taruvi-backend/` directory in the repo. Expected if you have no backend config. |
 | Nothing runs on merge | Workflow file must exist on the target branch, and the trigger is `push` — not `pull_request`. |
