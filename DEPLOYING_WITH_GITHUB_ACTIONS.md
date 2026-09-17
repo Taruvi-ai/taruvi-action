@@ -1,4 +1,4 @@
-# Setup Guide
+# 	Deploying to Taruvi with GitHub Actions
 
 Set up automatic deploys to Taruvi on every merge to `dev` or `main`.
 
@@ -94,7 +94,7 @@ jobs:
 
       - name: Deploy frontend worker
         id: frontend
-        uses: Taruvi-ai/taruvi-action/frontend-worker@v1
+        uses: Taruvi-ai/taruvi-action/frontend-worker@main
         with:
           site-url: ${{ vars.TARUVI_SITE_URL }}
           api-key: ${{ secrets.TARUVI_API_KEY }}
@@ -104,7 +104,7 @@ jobs:
 
       - name: Import backend config
         id: backend
-        uses: Taruvi-ai/taruvi-action/backend@v1
+        uses: Taruvi-ai/taruvi-action/backend@main
         with:
           site-url: ${{ vars.TARUVI_SITE_URL }}
           api-key: ${{ secrets.TARUVI_API_KEY }}
