@@ -64,7 +64,7 @@ rm -f "$BACKEND_ZIP"
 if [[ "$HTTP_CODE" -ge 200 && "$HTTP_CODE" -lt 300 ]]; then
   echo "::notice::Backend import successful!"
   echo "$BODY"
-  echo "status=true" >> "$GITHUB_OUTPUT"
+  echo "status=success" >> "$GITHUB_OUTPUT"
 else
   echo "::error::Failed to import backend configuration (HTTP $HTTP_CODE)"
   echo "$BODY"

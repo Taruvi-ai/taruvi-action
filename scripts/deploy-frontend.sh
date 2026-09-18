@@ -38,14 +38,45 @@ fi
 echo "Deploying frontend to: $SITE_URL"
 echo "App slug: $APP_SLUG"
 
-# Get default frontend worker slug from app settings
+# Get default frontend worker slug from app settings.
+#
+# This lookup decides between updating the existing worker and creating a new
+# one, so it must succeed before we act on it. A failed or unreadable response
+# is NOT treated as "no default worker" — doing so would create a duplicate
+# worker on a transient error and leave the real one serving the old build.
 echo "Checking for default frontend worker..."
-SETTINGS_RESPONSE=$(curl -s \
+SETTINGS_RESPONSE=$(curl -s -w "\n%{http_code}" \
   "${SITE_URL}/api/apps/${APP_SLUG}/settings/" \
   -H "Authorization: Api-Key ${API_KEY}" \
-  --connect-timeout 30) || true
+  --connect-timeout 30 \
+  --max-time 60) || true
 
-WORKER_SLUG=$(echo "$SETTINGS_RESPONSE" | jq -r '.data.default_frontend_worker_slug // empty')
+SETTINGS_CODE=$(echo "$SETTINGS_RESPONSE" | tail -n1)
+SETTINGS_BODY=$(echo "$SETTINGS_RESPONSE" | sed '$d')
+
+if [[ ! "$SETTINGS_CODE" =~ ^[0-9]+$ ]] || [[ "$SETTINGS_CODE" == "000" ]]; then
+  echo "::error::Could not reach ${SITE_URL} to read app settings (no HTTP response)."
+  echo "::error::Check that site-url is correct and reachable."
+  exit 1
+fi
+
+if [[ "$SETTINGS_CODE" -lt 200 || "$SETTINGS_CODE" -ge 300 ]]; then
+  echo "::error::Could not read settings for app '${APP_SLUG}' (HTTP ${SETTINGS_CODE})."
+  case "$SETTINGS_CODE" in
+    401|403) echo "::error::Credentials were rejected. An API key is only valid on the site that issued it — confirm site-url and api-key came from the same Taruvi site." ;;
+    404)     echo "::error::App '${APP_SLUG}' not found on ${SITE_URL}. Check app-slug, and that the app belongs to this site." ;;
+  esac
+  echo "$SETTINGS_BODY"
+  exit 1
+fi
+
+if ! echo "$SETTINGS_BODY" | jq -e . >/dev/null 2>&1; then
+  echo "::error::App settings response was not valid JSON (HTTP ${SETTINGS_CODE})."
+  echo "$SETTINGS_BODY"
+  exit 1
+fi
+
+WORKER_SLUG=$(echo "$SETTINGS_BODY" | jq -r '.data.default_frontend_worker_slug // empty')
 
 if [[ -n "$WORKER_SLUG" && "$WORKER_SLUG" != "null" ]]; then
   # Worker exists - Update it
@@ -67,14 +98,42 @@ if [[ -n "$WORKER_SLUG" && "$WORKER_SLUG" != "null" ]]; then
     BUILD_UUID=$(echo "$BODY" | jq -r '.data.latest_build.uuid // empty')
     FRONTEND_URL=$(echo "$BODY" | jq -r '.data.web_url // empty')
     
-    if [[ -n "$BUILD_UUID" && "$BUILD_UUID" != "null" ]]; then
-      echo "Setting build $BUILD_UUID as active..."
-      curl -s -X PATCH "${SITE_URL}/api/cloud/frontend_workers/${WORKER_SLUG}/set-active-build/" \
-        -H "Authorization: Api-Key ${API_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "{\"build_uuid\": \"${BUILD_UUID}\"}" \
-        --connect-timeout 30 || true
+    # Activation is what makes the uploaded build live. If it does not happen the
+    # worker keeps serving the previous build, so a silent failure here would
+    # report a successful deploy while the site stays stale. Both a missing build
+    # UUID and a failed activation are therefore hard errors.
+    if [[ -z "$BUILD_UUID" ]]; then
+      echo "::error::Build uploaded, but the response contained no build UUID, so it could not be activated."
+      echo "::error::The worker is still serving its previous build. Response body:"
+      echo "$BODY"
+      exit 1
     fi
+
+    echo "Setting build $BUILD_UUID as active..."
+    ACTIVATE_RESPONSE=$(curl -s -w "\n%{http_code}" \
+      -X PATCH "${SITE_URL}/api/cloud/frontend_workers/${WORKER_SLUG}/set-active-build/" \
+      -H "Authorization: Api-Key ${API_KEY}" \
+      -H "Content-Type: application/json" \
+      -d "{\"build_uuid\": \"${BUILD_UUID}\"}" \
+      --connect-timeout 30 \
+      --max-time 120) || true
+
+    ACTIVATE_CODE=$(echo "$ACTIVATE_RESPONSE" | tail -n1)
+    ACTIVATE_BODY=$(echo "$ACTIVATE_RESPONSE" | sed '$d')
+
+    if [[ ! "$ACTIVATE_CODE" =~ ^[0-9]+$ ]] || [[ "$ACTIVATE_CODE" == "000" ]]; then
+      echo "::error::Build $BUILD_UUID uploaded, but the activation request got no HTTP response."
+      echo "::error::The worker is still serving its previous build."
+      exit 1
+    fi
+
+    if [[ "$ACTIVATE_CODE" -lt 200 || "$ACTIVATE_CODE" -ge 300 ]]; then
+      echo "::error::Build $BUILD_UUID uploaded, but activation failed (HTTP ${ACTIVATE_CODE})."
+      echo "::error::The worker is still serving its previous build."
+      echo "$ACTIVATE_BODY"
+      exit 1
+    fi
+
     
     echo "::notice::Frontend deployment successful! (updated existing worker: $WORKER_SLUG)"
     echo "worker_slug=$WORKER_SLUG" >> "$GITHUB_OUTPUT"
