@@ -6,7 +6,7 @@ Import backend configuration to Taruvi.
 
 ```yaml
 - name: Import Backend
-  uses: Taruvi-ai/taruvi-action/backend@v1
+  uses: Taruvi-ai/taruvi-action/backend@main
   with:
     site-url: ${{ vars.TARUVI_SITE_URL }}
     api-key: ${{ secrets.TARUVI_API_KEY }}
@@ -80,11 +80,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Import Backend
         id: import
-        uses: Taruvi-ai/taruvi-action/backend@v1
+        uses: Taruvi-ai/taruvi-action/backend@main
         with:
           site-url: ${{ vars.TARUVI_SITE_URL }}
           api-key: ${{ secrets.TARUVI_API_KEY }}
