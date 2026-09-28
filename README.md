@@ -19,7 +19,7 @@ Deploy frontend builds to Taruvi Frontend Workers.
 
 ```yaml
 - name: Deploy Frontend
-  uses: Taruvi-ai/taruvi-action/frontend-worker@v1
+  uses: Taruvi-ai/taruvi-action/frontend-worker@main
   with:
     site-url: ${{ vars.TARUVI_SITE_URL }}
     api-key: ${{ secrets.TARUVI_API_KEY }}
@@ -77,7 +77,7 @@ Import backend configuration to Taruvi.
 
 ```yaml
 - name: Import Backend
-  uses: Taruvi-ai/taruvi-action/backend@v1
+  uses: Taruvi-ai/taruvi-action/backend@main
   with:
     site-url: ${{ vars.TARUVI_SITE_URL }}
     api-key: ${{ secrets.TARUVI_API_KEY }}
@@ -157,11 +157,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
 
       # Kept as separate steps so the build can take env vars without
       # accidentally handing them to the install.
@@ -176,7 +176,7 @@ jobs:
 
       - name: Deploy Frontend
         id: frontend
-        uses: Taruvi-ai/taruvi-action/frontend-worker@v1
+        uses: Taruvi-ai/taruvi-action/frontend-worker@main
         with:
           site-url: ${{ vars.TARUVI_SITE_URL }}
           api-key: ${{ secrets.TARUVI_API_KEY }}
@@ -204,11 +204,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Import Backend
         id: backend
-        uses: Taruvi-ai/taruvi-action/backend@v1
+        uses: Taruvi-ai/taruvi-action/backend@main
         with:
           site-url: ${{ vars.TARUVI_SITE_URL }}
           api-key: ${{ secrets.TARUVI_API_KEY }}
@@ -223,7 +223,7 @@ jobs:
 ```yaml
 - name: Deploy Frontend
   id: frontend
-  uses: Taruvi-ai/taruvi-action/frontend-worker@v1
+  uses: Taruvi-ai/taruvi-action/frontend-worker@main
   with:
     site-url: ${{ vars.TARUVI_SITE_URL }}
     api-key: ${{ secrets.TARUVI_API_KEY }}
@@ -233,7 +233,7 @@ jobs:
 
 - name: Import Backend
   id: backend
-  uses: Taruvi-ai/taruvi-action/backend@v1
+  uses: Taruvi-ai/taruvi-action/backend@main
   with:
     site-url: ${{ vars.TARUVI_SITE_URL }}
     api-key: ${{ secrets.TARUVI_API_KEY }}
