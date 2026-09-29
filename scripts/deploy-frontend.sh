@@ -38,6 +38,55 @@ fi
 echo "Deploying frontend to: $SITE_URL"
 echo "App slug: $APP_SLUG"
 
+# api METHOD URL MAX_TIME [curl args...]
+# Sends an authenticated request and sets HTTP_CODE and BODY. HTTP_CODE is 000
+# when no HTTP response came back (DNS, TLS, timeout).
+api() {
+  local method="$1" url="$2" max_time="$3" response
+  shift 3
+  response=$(curl -s -w "\n%{http_code}" -X "$method" "$url" \
+    -H "Authorization: Api-Key ${API_KEY}" \
+    --connect-timeout 30 \
+    --max-time "$max_time" \
+    "$@") || true
+  HTTP_CODE=$(echo "$response" | tail -n1)
+  BODY=$(echo "$response" | sed '$d')
+  [[ "$HTTP_CODE" =~ ^[0-9]{3}$ ]] || HTTP_CODE=000
+}
+
+is_2xx() {
+  [[ "$HTTP_CODE" -ge 200 && "$HTTP_CODE" -lt 300 ]]
+}
+
+# json FILTER — reads a field from BODY; empty when missing, null, or not JSON.
+json() {
+  echo "$BODY" | jq -r "$1 // empty" 2>/dev/null || true
+}
+
+# fail MESSAGE — reports the last request's status and body, then stops.
+fail() {
+  if [[ "$HTTP_CODE" == "000" ]]; then
+    echo "::error::$1 (no HTTP response from ${SITE_URL})."
+  else
+    echo "::error::$1 (HTTP ${HTTP_CODE})."
+    echo "$BODY"
+  fi
+  exit 1
+}
+
+# upload_build METHOD URL [curl args...]
+# Uploads the zip with set_active=true. The platform extracts an upload straight
+# into the worker's live domain, so a 2xx means the build is already serving;
+# set_active records it as the active build in the same request.
+upload_build() {
+  local method="$1" url="$2"
+  shift 2
+  api "$method" "$url" 300 \
+    -F "file=@${FRONTEND_ZIP};type=application/zip" \
+    -F "set_active=true" \
+    "$@"
+}
+
 # Get default frontend worker slug from app settings.
 #
 # This lookup decides between updating the existing worker and creating a new
@@ -45,143 +94,115 @@ echo "App slug: $APP_SLUG"
 # is NOT treated as "no default worker" — doing so would create a duplicate
 # worker on a transient error and leave the real one serving the old build.
 echo "Checking for default frontend worker..."
-SETTINGS_RESPONSE=$(curl -s -w "\n%{http_code}" \
-  "${SITE_URL}/api/apps/${APP_SLUG}/settings/" \
-  -H "Authorization: Api-Key ${API_KEY}" \
-  --connect-timeout 30 \
-  --max-time 60) || true
+api GET "${SITE_URL}/api/apps/${APP_SLUG}/settings/" 60
 
-SETTINGS_CODE=$(echo "$SETTINGS_RESPONSE" | tail -n1)
-SETTINGS_BODY=$(echo "$SETTINGS_RESPONSE" | sed '$d')
-
-if [[ ! "$SETTINGS_CODE" =~ ^[0-9]+$ ]] || [[ "$SETTINGS_CODE" == "000" ]]; then
+if [[ "$HTTP_CODE" == "000" ]]; then
   echo "::error::Could not reach ${SITE_URL} to read app settings (no HTTP response)."
   echo "::error::Check that site-url is correct and reachable."
   exit 1
 fi
 
-if [[ "$SETTINGS_CODE" -lt 200 || "$SETTINGS_CODE" -ge 300 ]]; then
-  echo "::error::Could not read settings for app '${APP_SLUG}' (HTTP ${SETTINGS_CODE})."
-  case "$SETTINGS_CODE" in
+if ! is_2xx; then
+  echo "::error::Could not read settings for app '${APP_SLUG}' (HTTP ${HTTP_CODE})."
+  case "$HTTP_CODE" in
     401|403) echo "::error::Credentials were rejected. An API key is only valid on the site that issued it — confirm site-url and api-key came from the same Taruvi site." ;;
     404)     echo "::error::App '${APP_SLUG}' not found on ${SITE_URL}. Check app-slug, and that the app belongs to this site." ;;
   esac
-  echo "$SETTINGS_BODY"
+  echo "$BODY"
   exit 1
 fi
 
-if ! echo "$SETTINGS_BODY" | jq -e . >/dev/null 2>&1; then
-  echo "::error::App settings response was not valid JSON (HTTP ${SETTINGS_CODE})."
-  echo "$SETTINGS_BODY"
+if ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+  echo "::error::App settings response was not valid JSON (HTTP ${HTTP_CODE})."
+  echo "$BODY"
   exit 1
 fi
 
-WORKER_SLUG=$(echo "$SETTINGS_BODY" | jq -r '.data.default_frontend_worker_slug // empty')
+WORKER_SLUG=$(json '.data.default_frontend_worker_slug')
+SET_DEFAULT=false
 
-if [[ -n "$WORKER_SLUG" && "$WORKER_SLUG" != "null" ]]; then
+if [[ -n "$WORKER_SLUG" ]]; then
   # Worker exists - Update it
   echo "Found default worker: $WORKER_SLUG"
   echo "Uploading new build..."
-  
-  RESPONSE=$(curl -s -w "\n%{http_code}" \
-    -X PATCH "${SITE_URL}/api/cloud/frontend_workers/${WORKER_SLUG}/" \
-    -H "Authorization: Api-Key ${API_KEY}" \
-    -F "file=@${FRONTEND_ZIP};type=application/zip" \
-    --connect-timeout 30 \
-    --max-time 300)
-  
-  HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-  BODY=$(echo "$RESPONSE" | sed '$d')
-  
-  if [[ "$HTTP_CODE" -ge 200 && "$HTTP_CODE" -lt 300 ]]; then
-    # Get the new build UUID and set it as active
-    BUILD_UUID=$(echo "$BODY" | jq -r '.data.latest_build.uuid // empty')
-    FRONTEND_URL=$(echo "$BODY" | jq -r '.data.web_url // empty')
-    
-    # Activation is what makes the uploaded build live. If it does not happen the
-    # worker keeps serving the previous build, so a silent failure here would
-    # report a successful deploy while the site stays stale. Both a missing build
-    # UUID and a failed activation are therefore hard errors.
-    if [[ -z "$BUILD_UUID" ]]; then
-      echo "::error::Build uploaded, but the response contained no build UUID, so it could not be activated."
-      echo "::error::The worker is still serving its previous build. Response body:"
-      echo "$BODY"
-      exit 1
-    fi
-
-    echo "Setting build $BUILD_UUID as active..."
-    ACTIVATE_RESPONSE=$(curl -s -w "\n%{http_code}" \
-      -X PATCH "${SITE_URL}/api/cloud/frontend_workers/${WORKER_SLUG}/set-active-build/" \
-      -H "Authorization: Api-Key ${API_KEY}" \
-      -H "Content-Type: application/json" \
-      -d "{\"build_uuid\": \"${BUILD_UUID}\"}" \
-      --connect-timeout 30 \
-      --max-time 120) || true
-
-    ACTIVATE_CODE=$(echo "$ACTIVATE_RESPONSE" | tail -n1)
-    ACTIVATE_BODY=$(echo "$ACTIVATE_RESPONSE" | sed '$d')
-
-    if [[ ! "$ACTIVATE_CODE" =~ ^[0-9]+$ ]] || [[ "$ACTIVATE_CODE" == "000" ]]; then
-      echo "::error::Build $BUILD_UUID uploaded, but the activation request got no HTTP response."
-      echo "::error::The worker is still serving its previous build."
-      exit 1
-    fi
-
-    if [[ "$ACTIVATE_CODE" -lt 200 || "$ACTIVATE_CODE" -ge 300 ]]; then
-      echo "::error::Build $BUILD_UUID uploaded, but activation failed (HTTP ${ACTIVATE_CODE})."
-      echo "::error::The worker is still serving its previous build."
-      echo "$ACTIVATE_BODY"
-      exit 1
-    fi
-
-    
-    echo "::notice::Frontend deployment successful! (updated existing worker: $WORKER_SLUG)"
-    echo "worker_slug=$WORKER_SLUG" >> "$GITHUB_OUTPUT"
-    echo "deploy_type=update" >> "$GITHUB_OUTPUT"
-    echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
-  else
-    echo "::error::Failed to update frontend worker (HTTP $HTTP_CODE)"
-    echo "$BODY"
-    exit 1
-  fi
+  upload_build PATCH "${SITE_URL}/api/cloud/frontend_workers/${WORKER_SLUG}/"
+  is_2xx || fail "Failed to upload the build to worker $WORKER_SLUG"
+  DEPLOY_TYPE=update
 else
-  # No default worker - Create new one with branch suffix
-  echo "No default frontend worker. Creating new worker..."
-  
-  # Build subdomain with optional branch suffix
+  # No default worker - deploy to a worker with branch suffix, then make it the
+  # app's default so the next run takes the update path above.
   if [[ -n "$BRANCH_NAME" ]]; then
     BRANCH_SUFFIX=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
-    SUBDOMAIN="${APP_SLUG}-${BRANCH_SUFFIX}"
+    WORKER_SLUG="${APP_SLUG}-${BRANCH_SUFFIX}"
   else
-    SUBDOMAIN="${APP_SLUG}"
+    WORKER_SLUG="${APP_SLUG}"
   fi
-  
-  echo "Subdomain: $SUBDOMAIN"
-  
-  RESPONSE=$(curl -s -w "\n%{http_code}" \
-    -X POST "${SITE_URL}/api/cloud/frontend_workers/" \
-    -H "Authorization: Api-Key ${API_KEY}" \
-    -F "file=@${FRONTEND_ZIP};type=application/zip" \
-    -F "name=${APP_SLUG}" \
-    -F "subdomain_input=${SUBDOMAIN}" \
-    -F "is_internal=true" \
-    --connect-timeout 30 \
-    --max-time 300)
-  
-  HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-  BODY=$(echo "$RESPONSE" | sed '$d')
-  
-  if [[ "$HTTP_CODE" -ge 200 && "$HTTP_CODE" -lt 300 ]]; then
-    NEW_WORKER_SLUG=$(echo "$BODY" | jq -r '.data.slug // empty')
-    FRONTEND_URL=$(echo "$BODY" | jq -r '.data.web_url // empty')
-    
-    echo "::notice::Frontend deployment successful! (created new worker: $NEW_WORKER_SLUG)"
-    echo "worker_slug=$NEW_WORKER_SLUG" >> "$GITHUB_OUTPUT"
-    echo "deploy_type=create" >> "$GITHUB_OUTPUT"
-    echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
+  SET_DEFAULT=true
+
+  echo "No default frontend worker. Target worker: $WORKER_SLUG"
+
+  # A worker can already exist at this slug without being the default: created
+  # by a run that failed before setting it, or by an older version of this
+  # action that never did. Reuse it instead of failing on the taken subdomain.
+  api GET "${SITE_URL}/api/cloud/frontend_workers/${WORKER_SLUG}/" 60
+
+  if [[ "$HTTP_CODE" == "404" ]]; then
+    echo "Creating worker $WORKER_SLUG..."
+    upload_build POST "${SITE_URL}/api/cloud/frontend_workers/" \
+      -F "name=${APP_SLUG}" \
+      -F "subdomain_input=${WORKER_SLUG}" \
+      -F "is_internal=true" \
+      -F "app=${APP_SLUG}"
+    is_2xx || fail "Failed to create frontend worker $WORKER_SLUG"
+    CREATED_SLUG=$(json '.data.slug')
+    WORKER_SLUG="${CREATED_SLUG:-$WORKER_SLUG}"
+    DEPLOY_TYPE=create
+  elif is_2xx; then
+    OWNER_APP=$(json '.data.app')
+    if [[ -n "$OWNER_APP" && "$OWNER_APP" != "$APP_SLUG" ]]; then
+      echo "::error::Worker $WORKER_SLUG already exists and belongs to app '${OWNER_APP}', not '${APP_SLUG}'."
+      echo "::error::Use a different branch-name, or set this app's default frontend worker in its settings."
+      exit 1
+    fi
+    echo "Found worker $WORKER_SLUG, not yet the app's default. Uploading new build..."
+    upload_build PATCH "${SITE_URL}/api/cloud/frontend_workers/${WORKER_SLUG}/" \
+      -F "app=${APP_SLUG}"
+    is_2xx || fail "Failed to upload the build to worker $WORKER_SLUG"
+    DEPLOY_TYPE=update
   else
-    echo "::error::Failed to create frontend worker (HTTP $HTTP_CODE)"
+    fail "Could not check for an existing worker $WORKER_SLUG"
+  fi
+fi
+
+FRONTEND_URL=$(json '.data.web_url')
+
+if [[ "$SET_DEFAULT" == "true" ]]; then
+  # App settings take the worker's URL, not its slug, and accept only a worker
+  # that belongs to the app — which the request above made sure of.
+  if [[ -z "$FRONTEND_URL" ]]; then
+    echo "::error::Worker $WORKER_SLUG is deployed, but the response had no web_url, so it could not be set as the default for app '${APP_SLUG}'."
+    echo "::error::Re-run the workflow to retry; it reuses the worker."
     echo "$BODY"
     exit 1
   fi
+
+  echo "Setting $WORKER_SLUG as the default frontend worker for app '${APP_SLUG}'..."
+  api PATCH "${SITE_URL}/api/apps/${APP_SLUG}/settings/" 60 \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n --arg url "$FRONTEND_URL" '{default_frontend_worker_url: $url}')"
+
+  if ! is_2xx; then
+    echo "::error::Worker $WORKER_SLUG is serving this build at $FRONTEND_URL, but could not be set as the default for app '${APP_SLUG}'."
+    echo "::error::Re-run the workflow to retry; it reuses the worker."
+    fail "Setting the default frontend worker failed"
+  fi
 fi
+
+if [[ "$DEPLOY_TYPE" == "create" ]]; then
+  echo "::notice::Frontend deployment successful! (created new worker: $WORKER_SLUG)"
+else
+  echo "::notice::Frontend deployment successful! (updated existing worker: $WORKER_SLUG)"
+fi
+echo "worker_slug=$WORKER_SLUG" >> "$GITHUB_OUTPUT"
+echo "deploy_type=$DEPLOY_TYPE" >> "$GITHUB_OUTPUT"
+echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"

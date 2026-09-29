@@ -38,8 +38,10 @@ Only `api-key` is a secret. See [Handling credentials](../README.md#handling-cre
 ## How It Works
 
 1. Reads the app's settings to find its default frontend worker
-2. If one exists: uploads the build to that worker, then activates it
-3. If not: creates a new worker with subdomain `{app-slug}-{branch-name}`
+2. If one exists: uploads the build to that worker as its active build, in one request
+3. If not: creates a worker for the app with subdomain `{app-slug}-{branch-name}`, uploads the build to it, and sets it as the app's default frontend worker, so the next run takes step 2. A worker already at that subdomain is reused if it belongs to this app or to no app.
+
+A build is live as soon as its upload succeeds.
 
 The branch name is lowercased and non-alphanumeric characters become hyphens, so `feature/Login-v2` yields the subdomain `{app-slug}-feature-login-v2`. With no `branch-name`, the subdomain is just `{app-slug}`.
 
@@ -56,9 +58,9 @@ Two statuses get a specific hint, because the cause is rarely what the status su
 | 401 / 403 | `site-url` and `api-key` came from **different Taruvi sites**. A key exists only in the schema of the site that issued it, so a valid key from site A simply does not exist on site B. Regenerating the key does not help. |
 | 404 | `app-slug` is wrong, or the app belongs to a different site than `site-url` points at. |
 
-**Uploading a build is not the same as making it live.** After a successful upload the action activates the new build, and treats failure to do so as a deploy failure — a green run over a site still serving the previous build is the one outcome a deploy tool must never produce. If activation fails, the uploaded build is left in place but inactive; it is not rolled back, and re-running uploads another build.
+**A new worker is not done until it is the app's default.** Without that, the next run would find no default and try to create the same worker again. If setting the default fails, the build is already live on the new worker but the step still fails; re-running the workflow reuses the worker and retries. A worker at `{app-slug}-{branch-name}` that belongs to a different app stops the deploy rather than being taken over.
 
-**Outputs are only written on success.** No downstream step receives a `frontend-url` for a build that is not live.
+**Outputs are only written on success.** No downstream step receives a `frontend-url` from a deploy that did not finish.
 
 ## Example
 
