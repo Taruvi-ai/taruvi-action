@@ -248,6 +248,10 @@ jobs:
 
 ---
 
+## UTM Tracking
+
+https://taruvibase.com/?utm_source=github&utm_medium=readme&utm_campaign=taruvi-action
+
 ## License
 
 MIT
